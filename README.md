@@ -51,6 +51,8 @@ git clone https://github.com/your-username/lossless-compression-of-llm-weights-u
 cd lossless-compression-of-llm-weights-using-rans-and-lstm
 pip install -r requirements.txt
 
+---
+
 ## Usage
 
 ### Encoding (Compression)
