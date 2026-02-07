@@ -1,55 +1,51 @@
-
-# lossless-compression-of-llm-weights-using-rans-and-lstm
+# Lossless Compression of LLM Weights Using LSTM and rANS
 
 ## Overview
-Large Language Models (LLMs) have grown to hundreds of billions of parameters, making storage, memory bandwidth, and deployment increasingly expensive.  
-This repository contains an implementation of a **lossless compression pipeline for LLM weights**, focusing on the **FP8 (E4M3) exponent bits** of Mixture-of-Experts (MoE) layers.
+Large Language Models (LLMs) have grown to hundreds of billions of parameters, making storage, memory bandwidth, and deployment increasingly expensive. This repository implements a **lossless compression pipeline for LLM weights**, focusing on the **FP8 (E4M3) exponent bits**, which exhibit a highly skewed distribution and are therefore significantly more compressible than mantissa or sign bits.
 
-The project combines **online predictive modeling using a two-layer LSTM** with **Range Asymmetric Numeral Systems (rANS)** arithmetic encoding to significantly reduce storage requirements **without any loss in model fidelity**.
+The core approach combines:
+- **Online predictive modeling** using a two-layer LSTM
+- **Arithmetic entropy coding** using Range Asymmetric Numeral Systems (rANS)
 
-This work was evaluated on the **DeepSeek-R1 (671B parameters)** architecture and demonstrates substantial compression gains for expert-layer weights.
+The method enables substantial storage reduction while guaranteeing **exact reconstruction** of the original weights.
 
 ---
 
-## Features
-- Lossless compression of FP8 (E4M3) exponent bits
-- Online LSTM-based probability prediction
-- rANS arithmetic encoding with exact reconstruction
-- Row-wise independent compression streams
-- Shared adaptive LSTM per layer or layer-pair
-- Hybrid decoding: GPU/MPS for prediction, CPU for arithmetic decoding
-- Verified bit-exact recovery of original exponents
+## Key Results
+- FP8 format: 1 sign bit, 4 exponent bits, 3 mantissa bits
+- Target model: DeepSeek-R1 (671B parameters)
+- Exponent-only compression:
+  - ~110 GB original exponent data
+  - ~42 GB compressed
+  - ~61.8% reduction
+  - ~1.53 bits per exponent (down from 4 bits)
+- Compression is fully lossless for exponent bits
+
+---
+
+## Repository Structure
+- `rans_encode_exponent.py`  
+  Encodes FP8 exponent sequences using an online LSTM and rANS arithmetic coding.
+
+- `rans_decode_exponent.py`  
+  Decodes compressed exponent streams and reconstructs exponent tensors exactly.
+
+- `mac_nanogpt.py`  
+  Auxiliary NanoGPT training script adapted for Apple Silicon (not required for compression).
+
+- `ANN_Final_Report.pdf`  
+  Full technical report describing methodology, experiments, and results.
+
+- `Neda&Naveen_FinalProjectSlides.pdf`  
+  Project presentation slides.
 
 ---
 
 ## Requirements
 - Python 3.9+
-- PyTorch
+- PyTorch (with FP8 E4M3 support)
 - NumPy
 - safetensors
-- pickle
-- Apple Silicon (MPS) or CUDA (optional, for acceleration)
-
----
-
-## Dataset
-This project does **not** use a conventional dataset.
-
-- Input data consists of **model weight tensors**
-- Target model: **DeepSeek-R1**
-- Weight format: **FP8 (E4M3)**
-- Focus: Mixture-of-Experts (MoE) layers
-- Approximately **93% of parameters** reside in expert layers
-
-The weights are loaded directly from `.safetensors` files.
-
----
-
-## Installation
-```bash
-git clone https://github.com/your-username/lossless-compression-of-llm-weights-using-rans-and-lstm.git
-cd lossless-compression-of-llm-weights-using-rans-and-lstm
-pip install -r requirements.txt
 
 ---
 
@@ -57,27 +53,32 @@ pip install -r requirements.txt
 
 ### Encoding (Compression)
 ```bash
-python rans_encode_exponent.py --layer <layer_id> --model-path <path_to_model>
+python rans_encode_exponent.py <model_dir> --layer <layer_id> --output_file compressed_layer.pkl
 ```
 
 This step:
-- Loads FP8 expert weights
-- Extracts exponent bits
-- Trains an LSTM online
-- Compresses exponent sequences using rANS
-- Outputs a compressed `.pkl` file containing metadata and encoded streams
+- Parses `model.safetensors.index.json`
+- Locates MoE expert tensors (gate, up, down projections)
+- Loads FP8 tensors using `safetensors.torch`
+- Extracts 4-bit exponent values
+- Builds row-wise exponent sequences across experts
+- Trains a two-layer LSTM online to predict exponent probabilities
+- Compresses sequences using rANS arithmetic coding
+- Writes compressed data and metadata to a `.pkl` file
 
 ---
 
 ### Decoding (Reconstruction)
 ```bash
-python rans_decode_exponent.py --input compressed_layer.pkl
+python rans_decode_exponent.py compressed_layer.pkl --output_safetensor decoded_exponents.safetensors
 ```
 
 This step:
-- Reconstructs exponent sequences exactly
-- Reassembles exponent tensors
-- Writes reconstructed data to `.safetensors`
+- Loads compressed exponent streams and metadata
+- Reinitializes the LSTM with the same architecture
+- Decodes exponent sequences exactly using rANS
+- Reconstructs exponent tensors
+- Saves reconstructed exponents to `.safetensors`
 
 ---
 
@@ -85,7 +86,7 @@ This step:
 
 ### Data Loading and Preprocessing
 - Parses `model.safetensors.index.json`
-- Locates expert tensors:
+- Resolves expert tensors:
   - Gate projection
   - Up projection
   - Down projection
@@ -97,11 +98,11 @@ This step:
 
 ### LSTM Model Integration
 - Two-layer LSTM implemented in PyTorch
-- Embedding layer + stacked LSTM layers
+- Embedding layer followed by stacked LSTM layers
 - LogSoftmax output for probability prediction
-- Online training using `NLLLoss` and Adam optimizer
+- Online training using NLLLoss and Adam optimizer
 - BF16 precision used to reduce memory overhead
-- Shared LSTM per layer or per layer-pair
+- One shared LSTM per layer or per layer-pair
 
 ---
 
@@ -115,13 +116,13 @@ This step:
 
 ### Similarity Calculation
 Not applicable.  
-Compression is driven by **entropy modeling**, not semantic similarity.
+Compression is driven by entropy modeling, not semantic similarity.
 
 ---
 
 ### Recommendation
 Not applicable.  
-This repository implements a **systems-level compression framework**, not a recommendation system.
+This repository implements a systems-level compression framework, not a recommendation system.
 
 ---
 
@@ -130,8 +131,8 @@ This repository implements a **systems-level compression framework**, not a reco
 ### Input
 - FP8 expert weight tensors
 - Example shapes:
-  - Up projection: `(2048 × 7160)`
-  - Down projection: `(7160 × 2048)`
+  - Up projection: (2048 × 7160)
+  - Down projection: (7160 × 2048)
 - Total FP8 expert weight size: ~220 GB
 - Exponent component size: ~110 GB
 
@@ -172,13 +173,11 @@ This repository implements a **systems-level compression framework**, not a reco
 ---
 
 ## Acknowledgments
-This project was developed at **Syracuse University**.
+This project was developed at Syracuse University.
 
-**Authors:**
-- Neda Abdolrahimi  
-- Naveen Ashok  
+Authors:
+- Neda Abdolrahimi
+- Naveen Ashok
 
-**Advisor:**
+Advisor:
 - Prof. C. K. Mohan
-
-
